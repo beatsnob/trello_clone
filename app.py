@@ -1,9 +1,11 @@
+from crypt import methods
 from enum import unique
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date
 from flask_marshmallow import Marshmallow
 from flask_bcrypt import Bcrypt
+from sqlalchemy.exc import IntegrityError
 
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
@@ -24,7 +26,7 @@ class User(db.Model):
 
 class UserSchema(ma.Schema):
     class Meta:
-        fields = ('id', 'name', 'email', 'is_admin')
+        fields = ('id', 'name', 'email', 'password', 'is_admin')
 
 class Card(db.Model):
     __tablename__ = 'cards'
@@ -57,17 +59,17 @@ def seed_db():
     users = [
         User(
             email = 'admin@spam.com',
-            password = bcrypt.generate_password_hash('eggs'),
+            password = bcrypt.generate_password_hash('eggs').decode('utf-8'),
             is_admin = True
         ),
         User(
             name = 'John Cleese',
             email = 'someone@spam.com',
-            password = bcrypt.generate_password_hash('12345')
+            password = bcrypt.generate_password_hash('12345').decode('utf-8')
 
         )
     ]
-    
+
     cards = [
         Card(
             title = 'Start the project',
@@ -104,12 +106,37 @@ def seed_db():
     db.session.commit()
     print('Tables seeded')
 
+@app.route('/')
+def index():
+    return 'Hello world!'
+
+@app.route('/auth/register/', methods=['POST'])
+def auth_register():
+    try:
+        #load the posted user info and parse the JSON
+        user_info = UserSchema().load(request.json)
+        #create a new User model instance from the user_info
+        user = User(
+            email = user_info['email'],
+            password = bcrypt.generate_password_hash(user_info['password']).decode('utf-8'),
+            name = user_info['name']
+        )
+        #add and commit the user to the database
+        db.session.add(user)
+        db.session.commit()
+        #respond to client
+        return UserSchema(exclude=['password']).dump(user), 201
+    except IntegrityError:
+        return {'error': 'Email address already in use'}, 409
+
 @app.route('/cards/')
 def all_cards():
     #commented section is the legacy way to query the ORM
+
     #select * from cards; psql equivalent to below
     #cards = Card.query.all()
     #print(cards)
+    
     #the following is the new way
     stmt = db.select(Card).order_by(Card.priority.desc(), Card.title)
     cards = db.session.scalars(stmt)
@@ -134,8 +161,3 @@ def count_ongoing():
     stmt = db.select(db.func.count()).select_from(Card).filter_by(status='Ongoing')
     cards = db.session.scalar(stmt)
     print(cards)
-
-
-@app.route('/')
-def index():
-    return 'Hello world!'
