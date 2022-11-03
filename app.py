@@ -1,20 +1,22 @@
 from crypt import methods
 from enum import unique
+from datetime import date, timedelta
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
-from datetime import date
 from flask_marshmallow import Marshmallow
 from flask_bcrypt import Bcrypt
 from sqlalchemy.exc import IntegrityError
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required
 
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
-
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://trello_dev:password123@127.0.0.1:5432/trello'
+app.config['JWT_SECRET_KEY'] = 'hello there'
 
 db = SQLAlchemy(app)
 ma = Marshmallow(app)
 bcrypt = Bcrypt(app)
+jwt = JWTManager(app)
 
 class User(db.Model):
     __tablename__ = 'users'
@@ -113,13 +115,11 @@ def index():
 @app.route('/auth/register/', methods=['POST'])
 def auth_register():
     try:
-        #load the posted user info and parse the JSON
-        user_info = UserSchema().load(request.json)
         #create a new User model instance from the user_info
         user = User(
-            email = user_info['email'],
-            password = bcrypt.generate_password_hash(user_info['password']).decode('utf-8'),
-            name = user_info['name']
+            email = request.json['email'],
+            password = bcrypt.generate_password_hash(request.json['password']).decode('utf-8'),
+            name = request.json['name']
         )
         #add and commit the user to the database
         db.session.add(user)
@@ -129,7 +129,22 @@ def auth_register():
     except IntegrityError:
         return {'error': 'Email address already in use'}, 409
 
+@app.route('/auth/login/', methods=['POST'])
+def auth_login():
+    #find a user by email address
+    stmt = db.select(User).filter_by(email=request.json['email'])
+    user = db.session.scalar(stmt)
+    #if user exists and password is correct
+    if user and bcrypt.check_password_hash(user.password, request.json['password']):
+        #return UserSchema(exclude=['password']).dump(user), 200
+        token = create_access_token(identity=str(user.id), expires_delta=timedelta(days=1))
+        return {'email': user.email, 'token': token, 'is_admin': user.is_admin}
+    else:
+        return {'error': 'Invalid email or password'}, 401
+
+
 @app.route('/cards/')
+@jwt_required()
 def all_cards():
     #commented section is the legacy way to query the ORM
 
